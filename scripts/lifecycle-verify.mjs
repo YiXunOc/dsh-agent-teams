@@ -389,6 +389,15 @@ check('slash command preserves the exact submitted line as user-authored chat',
 check('preserved slash command still activates through the gesture boundary',
   invokedAgentTeamsGoal([submittedCommand]) === goal)
 check('activation directive names the protocol', buildActivationDirective(goal).includes('AgentTeams protocol'))
+const preStep = listeners.get('agent/pre-step')?.at(-1)
+const activationDecision = await preStep?.({
+  messages: [submittedCommand], signal: new AbortController().signal,
+}, async () => ({ kind: 'enter', messages: [] }))
+const activationContext = activationDecision?.messages?.at(-1)
+check('activation context uses the released plugin message source contract',
+  JSON.stringify(activationContext?.source) === JSON.stringify({
+    kind: 'plugin', plugin: '@nanmicoder/dsh-agent-teams', form: 'instructions',
+  }) && activationContext?.content?.some(block => block.type === 'text' && block.text.includes(goal)))
 const profileGoal = 'ship the prepared release'
 const profileActivated = profileCommand.handler({
   agent: captain, rawInput: ` ${profileGoal}`, signal: new AbortController().signal, commandId: 'cmd-profile-alias',

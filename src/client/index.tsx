@@ -25,6 +25,7 @@ import {
   AGENT_TEAMS_LOCALE_NAMESPACE, en, zh, type AgentTeamsLocaleKey,
 } from './locales.ts'
 import { openAgentTeamMember, type AgentTeamsLayoutNavigator } from './session-navigation.ts'
+import type { MainSessionSource } from './current-session.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -34,7 +35,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Required services: conversation nodes, slots, sessions navigation, and locale. */
-export const inject = ['uiConversation', 'slots', 'sessions', 'locale', 'modelDirectories', 'layout']
+export const inject = ['uiConversation', 'uiSession', 'slots', 'sessions', 'locale', 'modelDirectories', 'layout']
 
 /** The host supplies this hook for the lifetime of a 0.1.5 root slot. */
 interface PanelNavigationProps {
@@ -70,6 +71,7 @@ export function apply(ctx: ClientContext): void {
     <ActivityPanel
       conversationVisible={conversationVisible}
       sessionsList={ctx.sessions.list}
+      mainSession={ctx.uiSession.adapter.current as MainSessionSource}
       modelDirectories={ctx.modelDirectories}
       openMember={openMember}
       t={t}

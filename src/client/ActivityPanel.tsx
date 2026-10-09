@@ -77,6 +77,7 @@ import {
   type PanelResizeEdge,
 } from './panel-geometry.ts'
 import css from './ActivityPanel.module.css'
+import { currentSessionId, type MainSessionSource } from './current-session.ts'
 
 /** Grace before the panel collapses once no team remains. */
 const AUTOCLOSE_GRACE_MS = 2000
@@ -760,11 +761,12 @@ function historicCardTeam(data: AgentTeamsCardData, owner: string): ActivityTeam
 export type ActivityPanelProps = {
   readonly conversationVisible?: boolean
   readonly sessionsList: ObservableSnapshot<SessionListState>
+  readonly mainSession: MainSessionSource
   readonly modelDirectories: ModelDirectoryResolver
   readonly openMember: (parentId: SessionId, childId: SessionId) => void
 } & PropsLocale<'agentTeams'>
 
-export function ActivityPanel({ sessionsList, modelDirectories, openMember, t, conversationVisible = true }: ActivityPanelProps) {
+export function ActivityPanel({ sessionsList, mainSession, modelDirectories, openMember, t, conversationVisible = true }: ActivityPanelProps) {
   // Navigating to a member's subagent transcript is an explicit departure:
   // hide the floater immediately instead of waiting out the autocollapse
   // grace, so the panel never lingers over the member session.
@@ -786,10 +788,15 @@ export function ActivityPanel({ sessionsList, modelDirectories, openMember, t, c
   const gestureRef = useRef<PanelGesture | null>(null)
   const frameRef = useRef<number | null>(null)
   const pendingLayoutRef = useRef<PanelLayout | null>(null)
-  const current = useSyncExternalStore(
+  const sessionList = useSyncExternalStore(
     sessionsList.subscribe,
     sessionsList.getSnapshot,
-  ).current
+  )
+  const mainBinding = useSyncExternalStore(
+    mainSession.subscribe,
+    mainSession.getSnapshot,
+  )
+  const current = currentSessionId(mainBinding, sessionList)
   const autoOpenTrackerRef = useRef<{
     sessionId: SessionId | undefined
     restoreComplete: boolean
