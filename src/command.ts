@@ -7,12 +7,17 @@ import { parseProfileInvocation, resolveProfileTaskPlanning, type TeamProfileCon
 export const AGENT_TEAMS_COMMAND = 'agent-teams'
 const PROFILE_COMMAND_PREFIX = `${AGENT_TEAMS_COMMAND}-`
 
-/** Stable released message-source shape for model-visible AgentTeams context. */
+/** Producer-owned source for model-visible AgentTeams context. */
 export const AGENT_TEAMS_CONTEXT_SOURCE = Object.freeze({
-  kind: 'plugin' as const,
-  plugin: '@nanmicoder/dsh-agent-teams',
+  kind: 'plugin:@nanmicoder/dsh-agent-teams' as const,
   form: 'instructions' as const,
 })
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'plugin:@nanmicoder/dsh-agent-teams': typeof AGENT_TEAMS_CONTEXT_SOURCE
+  }
+}
 
 const GESTURE = /^\/agent-teams(?=$|[\t\n\r ])/u
 

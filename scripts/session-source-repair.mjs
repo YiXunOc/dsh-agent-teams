@@ -14,8 +14,7 @@ const decompressFrame = promisify(zstdDecompress)
 const CHECKSUM_OPTIONS = { params: { [constants.ZSTD_c_checksumFlag]: 1 } }
 
 export const AGENT_TEAMS_CONTEXT_SOURCE = Object.freeze({
-  kind: 'plugin',
-  plugin: '@nanmicoder/dsh-agent-teams',
+  kind: 'plugin:@nanmicoder/dsh-agent-teams',
   form: 'instructions',
 })
 
@@ -148,7 +147,7 @@ export async function repairFile({ input, output, expectedSha256 }) {
 }
 
 function usage() {
-  return 'Usage: node scripts/session-source-repair.mjs --input <session.jsonl.zstd> --output <new.zstd> --sha256 <expected>'
+  return 'Legacy JSONL only (not DSH v4): node scripts/session-source-repair.mjs --input <session.jsonl.zstd> --output <new.zstd> --sha256 <expected>'
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {

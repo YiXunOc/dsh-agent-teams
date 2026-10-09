@@ -4,7 +4,7 @@ import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/c
 
 /** Session identity projected by ui-session's main-view binding. */
 export interface MainSessionBinding {
-  readonly props: { readonly sessionId?: SessionId }
+  readonly key?: SessionId
 }
 
 /** Prefer the current ui-session contract, retaining the legacy list fallback. */
@@ -12,7 +12,7 @@ export function currentSessionId(
   binding: MainSessionBinding,
   sessions: SessionListState,
 ): SessionId | undefined {
-  return binding.props.sessionId ?? sessions.current
+  return binding.key ?? ('current' in sessions ? sessions.current as SessionId | undefined : undefined)
 }
 
 export type MainSessionSource = ObservableSnapshot<MainSessionBinding>

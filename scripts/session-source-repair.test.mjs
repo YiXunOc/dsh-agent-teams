@@ -20,7 +20,7 @@ test('repairs only historical AgentTeams command message sources', () => {
   const result = repairAgentTeamsSource(source)
   assert.deepEqual(result.value, {
     type: 'user/message', seq: 7,
-    data: { source: { kind: 'plugin', plugin: '@nanmicoder/dsh-agent-teams', form: 'instructions' } },
+    data: { source: { kind: 'plugin:@nanmicoder/dsh-agent-teams', form: 'instructions' } },
   })
   assert.equal(result.repaired, true)
 })
@@ -67,7 +67,7 @@ test('preserves the DSH concatenated-frame container and untouched frame bytes',
     assert.deepEqual(repaired.subarray(ranges[1].start, ranges[1].end), sourceFrames[1])
     const finalRow = JSON.parse((await decompress(repaired.subarray(ranges[2].start, ranges[2].end))).toString('utf8'))
     assert.deepEqual(finalRow.data.source, {
-      kind: 'plugin', plugin: '@nanmicoder/dsh-agent-teams', form: 'instructions',
+      kind: 'plugin:@nanmicoder/dsh-agent-teams', form: 'instructions',
     })
   } finally {
     await rm(root, { recursive: true, force: true })
