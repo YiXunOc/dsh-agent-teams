@@ -53,6 +53,9 @@ export function discoverWorkspacePackages(host, trackedFiles) {
     for (const path of trackedFiles) {
         if (!/^(?:vendor\/[^/]+|packages\/[^/]+\/[^/]+|apps\/[^/]+|native\/system(?:\/packages\/[^/]+)?)\/package\.json$/.test(path)) continue;
         const manifestPath = join(host, path), manifest = readJson(manifestPath);
+        // Private unversioned orchestration packages (e.g. apps/portable) are
+        // not runtime packages and cannot be linked into a versioned closure.
+        if (manifest.private === true && manifest.version === undefined) continue;
         if (typeof manifest.name !== 'string' || typeof manifest.version !== 'string') throw Error('Invalid workspace manifest: ' + path);
         if (packages.has(manifest.name)) throw Error('Duplicate workspace package: ' + manifest.name);
         packages.set(manifest.name, { name: manifest.name, version: manifest.version, directory: realpathSync(dirname(manifestPath)), manifestPath, manifestSha256: sha256(manifestPath), manifest });

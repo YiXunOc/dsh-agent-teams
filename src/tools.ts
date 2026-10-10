@@ -328,7 +328,9 @@ async function stopTeamMemberActivations(
   // Every supported exact host has targeted recursive drain. Unlike interrupt,
   // it closes admission and clears queued work before awaiting descendants.
   signal?.throwIfAborted()
-  await ctx.subagents.drainContinuableChildren(captain, memberIds)
+  const runtime = ctx.subagents as typeof ctx.subagents & { drainChildren?: (parent: Agent, ids: readonly SessionId[]) => Promise<void> }
+  if (typeof runtime.drainChildren === 'function') await runtime.drainChildren(captain, memberIds)
+  else await runtime.drainContinuableChildren(captain, memberIds)
 }
 
 export async function haltTeamWork(input: {

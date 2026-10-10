@@ -54,6 +54,18 @@ test('workspace discovery ignores generated residue and rejects duplicate identi
     assert.throws(() => discoverWorkspacePackages(root, [...files, 'packages/boot/duplicate/package.json']), /Duplicate/);
 });
 
+test('source discovery excludes only private unversioned orchestration packages', t => {
+    const root = sandbox(t);
+    const paths = ['apps/cli', 'packages/boot/app-boot', 'vendor/cordis'];
+    ['@deepseek-ai/dsh', '@deepseek-ai/dsh-app-boot', '@deepseek-ai/cordis'].forEach((name, index) => manifest(root, paths[index], name));
+    const portable = manifest(root, 'apps/portable', '@deepseek-ai/dsh-portable', { private: true });
+    writeFileSync(join(portable, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-portable', private: true }));
+    const files = [...paths.map(path => path + '/package.json'), 'apps/portable/package.json'];
+    assert.equal(discoverWorkspacePackages(root, files).has('@deepseek-ai/dsh-portable'), false);
+    writeFileSync(join(portable, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-portable' }));
+    assert.throws(() => discoverWorkspacePackages(root, files), /Invalid workspace manifest/);
+});
+
 test('declared closure reports resolved versions and rejects a registry DSH duplicate', t => {
     const root = sandbox(t);
     const host = manifest(root, 'host', '@deepseek-ai/dsh', { dependencies: { '@deepseek-ai/dsh-agent': '*' } });

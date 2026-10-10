@@ -31,7 +31,7 @@ export const PERSONA_PROTOCOL_MAX_CHARS = 400
 /**
  * Restore the SessionId brand on a value that round-tripped through the
  * durable team file. The brand is erased by JSON serialization; the value
- * originated from `startContinuable`/`agent.id`, so this cast is the boundary
+ * originated from `startActivation`/`startContinuable`/`agent.id`, so this cast is the boundary
  * restoration, not a new assertion.
  */
 function brandedSessionId(value: string): SessionId {
@@ -623,36 +623,36 @@ export async function spawnMember(
     throw new Error(`agent-teams: provider "${config.provider}" cannot restrict captain-only tools for members`)
   }
   const label = `${MEMBER_LABEL_PREFIX}${team.id}:${member.name}`
+  const runtime = ctx.subagents as typeof ctx.subagents & {
+    startActivation?: (spec: {
+      provider: string; label: string; request: {
+        prompt: { type: 'text'; text: string }[]; parent: Agent; persona: string
+        toolFilter: { deny: string[] }; agentOptions: { provider: string; model: string; reasoningEffort?: ReturnType<typeof ReasoningEffortId> }
+      }; signal: AbortSignal; delivery: 'parent'
+    }) => Promise<{ childId: SessionId; messageId?: unknown }>
+  }
   const start = await selections.withPending(captain.id, label, llmSelection, () => (
-    startMemberWithLenientFilter(
-      toolFilter => ctx.subagents.startContinuable({
-        provider: config.provider,
-        label,
-        request: {
-          prompt: [{ type: 'text', text: initialPrompt ?? memberWelcome(team, member.name) }],
-          parent: captain,
-          persona: memberPersona(team, member, stateDir, config.executionPrompt),
-          // Depth deny entries name host tools; resolve them against the
-          // running host's registry so a renamed delegation tool cannot abort
-          // the spawn (see memberToolFilter). Depth is still enforced by the
-          // parent-chain guard installed at plugin mount. A filter the host
-          // still rejects is retried without the names it reported.
-          toolFilter,
-          agentOptions: {
-            provider: llmSelection.provider,
-            model: llmSelection.model,
-            ...llmSelection.reasoningEffort === undefined
-              ? {}
-              : { reasoningEffort: ReasoningEffortId(llmSelection.reasoningEffort) },
-          },
-          // Harness request.maxDepth caps the absolute depth of THIS creation;
-          // it is not inherited by later delegations. The guard below enforces
-          // the configured member-relative descendant budget instead.
+    startMemberWithLenientFilter(toolFilter => {
+      // Keep both Host generations on one member request. The filter only
+      // narrows visible tools; the runtime guard below owns relative depth.
+      const request = {
+        prompt: [{ type: 'text' as const, text: initialPrompt ?? memberWelcome(team, member.name) }],
+        parent: captain,
+        persona: memberPersona(team, member, stateDir, config.executionPrompt),
+        toolFilter,
+        agentOptions: {
+          provider: llmSelection.provider,
+          model: llmSelection.model,
+          ...llmSelection.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: ReasoningEffortId(llmSelection.reasoningEffort) },
         },
-        signal,
-      }),
-      memberToolFilter(config.maxDepth, restrictableToolNames(captain)),
-    )
+      }
+      const spec = { provider: config.provider, label, request, signal }
+      return typeof runtime.startActivation === 'function'
+        ? runtime.startActivation({ ...spec, delivery: 'parent' })
+        : runtime.startContinuable(spec)
+    }, memberToolFilter(config.maxDepth, restrictableToolNames(captain)))
   ))
   member.id = start.childId
 }
@@ -762,15 +762,22 @@ export function installMemberDelegationGuard(ctx: Context, stateDir: string, max
   ctx.effect(() => {
     const start = runtime.start
     const continuable = runtime.startContinuable
+    const activation = (runtime as typeof runtime & { startActivation?: (spec: { request: { parent: Agent } }) => Promise<unknown> }).startActivation
     const startDescriptor = Object.getOwnPropertyDescriptor(runtime, 'start')
     const continuableDescriptor = Object.getOwnPropertyDescriptor(runtime, 'startContinuable')
+    const activationDescriptor = Object.getOwnPropertyDescriptor(runtime, 'startActivation')
     const guardedStart: typeof start = async (name, request) => { check(request.parent); return start.call(runtime, name, request) }
     const guardedContinuable: typeof continuable = async spec => { check(spec.request.parent); return continuable.call(runtime, spec) }
-    runtime.start = guardedStart
-    runtime.startContinuable = guardedContinuable
+    const guardedActivation = activation === undefined ? undefined : async (spec: { request: { parent: Agent } }) => {
+      check(spec.request.parent)
+      return activation.call(runtime, spec)
+    }
+    if (typeof start === 'function') runtime.start = guardedStart
+    if (typeof continuable === 'function') runtime.startContinuable = guardedContinuable
+    if (guardedActivation !== undefined) (runtime as typeof runtime & { startActivation?: typeof guardedActivation }).startActivation = guardedActivation
     return () => {
       active = false
-      for (const [key, fn, descriptor] of [['start', guardedStart, startDescriptor], ['startContinuable', guardedContinuable, continuableDescriptor]] as const) {
+      for (const [key, fn, descriptor] of [['start', guardedStart, startDescriptor], ['startContinuable', guardedContinuable, continuableDescriptor], ['startActivation', guardedActivation, activationDescriptor]] as const) {
         if (Object.getOwnPropertyDescriptor(runtime, key)?.value !== fn) continue
         if (descriptor === undefined) Reflect.deleteProperty(runtime, key)
         else Object.defineProperty(runtime, key, descriptor)

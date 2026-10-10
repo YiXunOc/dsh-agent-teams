@@ -3,10 +3,11 @@ import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createTeamDir, createMessage, appendMailbox, readMailbox, readUnreadMailbox, readPendingMailbox, markMailboxDelivered, writeTeam } from '../lib/state.js'
+import { createTeamDir, createMessage, appendMailbox, readTeam, readMailbox, readUnreadMailbox, readPendingMailbox, markMailboxDelivered, writeTeam } from '../lib/state.js'
 import { canDeclareDelivery } from '../lib/quality-gates.js'
 import { installMailboxAdmission, mailboxPrompt } from '../lib/mailbox.js'
 import { installMemberSelectionRuntime, installMemberDelegationGuard } from '../lib/members.js'
+import { haltTeamWork } from '../lib/tools.js'
 import { steerMemberPrompt } from '../lib/harness-compat.js'
 
 function team() { return { id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 1,
@@ -141,4 +142,40 @@ await test('member-relative delegation limit covers raw runtime calls and preser
   await assert.rejects(h.ctx.subagents.startContinuable({ request: { parent: worker } }), /delegation limit/)
   await h.ctx.subagents.start('spawn', { parent: captain })
   assert.deepEqual(created, ['captain'])
+})
+
+await test('alpha.2 startActivation cannot bypass member-relative delegation limit', async t => {
+  const h = await fixture(t), created = [], handles = new Map()
+  const captain = { id: 'captain', session: { header: { cwd: h.workspace }, ownEvents: () => [] } }
+  const worker = { id: 'worker', session: { header: { cwd: h.workspace, parentSession: 'captain' }, ownEvents: () => [{ type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker' } }] } }
+  handles.set(captain.id, captain); handles.set(worker.id, worker)
+  h.ctx.agents = { get: id => handles.get(id) }
+  h.ctx.subagents = { async startActivation(spec) { created.push(spec.request.parent.id); return { childId: 'grandchild' } } }
+  const original = Object.getOwnPropertyDescriptor(h.ctx.subagents, 'startActivation')
+  const effects = []
+  h.ctx.effect = setup => { const dispose = setup(); effects.push(dispose); return dispose }
+  installMemberDelegationGuard(h.ctx, '.agent-teams', 0)
+  await assert.rejects(h.ctx.subagents.startActivation({ request: { parent: worker } }), /delegation limit/)
+  await h.ctx.subagents.startActivation({ request: { parent: captain } })
+  assert.deepEqual(created, ['captain'])
+  effects.pop()()
+  assert.deepEqual(Object.getOwnPropertyDescriptor(h.ctx.subagents, 'startActivation'), original)
+  await h.ctx.subagents.startActivation({ request: { parent: worker } })
+  assert.deepEqual(created, ['captain', 'worker'])
+})
+
+await test('alpha.2 team stop persists halt before draining selected children', async t => {
+  const h = await fixture(t), calls = []
+  const captain = { id: 'captain', session: { header: { cwd: h.workspace } }, cancel() { calls.push('cancel') } }
+  h.ctx.logger.debug = () => {}
+  h.ctx.subagents = { async drainChildren(parent, ids) {
+    assert.equal(parent, captain)
+    assert.deepEqual(ids, ['worker'])
+    assert.equal((await readTeam(h.root, 'team')).halted, true)
+    calls.push('drain')
+  } }
+  h.ctx.agents = { get(id) { return id === 'captain' ? captain : undefined } }
+  await haltTeamWork({ ctx: h.ctx, stateRoot: h.root, teamId: 'team', captain })
+  assert.deepEqual(calls, ['cancel', 'drain', 'cancel'])
+  assert.equal((await readTeam(h.root, 'team')).halted, true)
 })

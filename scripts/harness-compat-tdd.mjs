@@ -293,6 +293,22 @@ await test('spawn explicitly passes reasoning effort, preserving persona and too
   assert.equal(member.id, 'child')
 })
 
+await test('alpha.2 activation accepts one parent-delivered member prompt', async () => {
+  let received
+  const ctx = { subagents: {
+    getProvider: () => ({ prepareContinuable() {}, capabilities: { persona: true, toolFilter: true } }),
+    startActivation: async spec => { received = spec; return { childId: 'alpha2-child', messageId: 'welcome' } },
+  } }
+  const captain = { id: 'captain' }
+  const team = { id: 'team', name: 'Team', captainSessionId: captain.id, members: [], tasks: [], createdAt: 1, taskSeq: 0 }
+  const member = { id: '', name: 'worker', role: 'engineer', joinedAt: 1, status: 'idle' }
+  await spawnMember(ctx, { provider: 'spawn', maxDepth: 0 }, { withPending: (_p, _l, _s, run) => run() },
+    { provider: 'chosen', model: 'model', reasoningEffort: 'high' }, captain, team, member, '.agent-teams', signal)
+  assert.equal(received.delivery, 'parent')
+  assert.deepEqual(received.request.agentOptions, { provider: 'chosen', model: 'model', reasoningEffort: 'high' })
+  assert.equal(member.id, 'alpha2-child')
+})
+
 await test('depth deny entries resolve against the host tool registry (#163, #164)', async () => {
   // Host compositions register the delegation tool under a configurable
   // name (dsh-tool-subagent `toolName`, default `subagent`; the dsh-base
