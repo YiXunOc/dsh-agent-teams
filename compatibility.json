@@ -48,6 +48,12 @@
       "repository": "https://github.com/deepseek-ai/deepseek-harness",
       "commit": "9d8e006534155990b16cab69f4d79f40c1080c9d",
       "evidence": "docs/dsh-0.2.1-alpha.2-source-compatibility.md"
+    },
+    {
+      "version": "0.2.1-alpha.4",
+      "repository": "https://github.com/deepseek-ai/deepseek-harness",
+      "commit": "19821b6b796ee3b6bcac62e5ce11d70a423cceb2",
+      "evidence": "docs/dsh-0.2.1-alpha.4-source-compatibility.md"
     }
   ]
 }

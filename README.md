@@ -6,6 +6,12 @@
   <img src="./assets/readme/hero.svg" width="100%" alt="dsh-agent-teams turns one DeepSeek Harness session into a coordinated multi-agent team">
 </p>
 
+<div align="center">
+
+[![AtomGit](https://atomgit.com/NanmiCoder/dsh-agent-teams/star/new_badge.svg)](https://atomgit.com/NanmiCoder/dsh-agent-teams)
+
+</div>
+
 <p align="center">
   <a href="https://dshfind.com/en/plugins/NanmiCoder/dsh-agent-teams?ref=badge"><img src="https://img.shields.io/badge/recommended%20by-dshfind-FFD700?style=flat-square" alt="Recommended by dshfind"></a>
   <a href="https://dshfind.com/en/plugins/NanmiCoder/dsh-agent-teams?ref=badge"><img src="https://dshfind.com/api/badge/NanmiCoder/dsh-agent-teams?lang=en" alt="dshfind score"></a>
@@ -30,7 +36,7 @@ Ask in natural language. The plugin provides the team protocol, 14 coordination 
 
 ## Releases
 
-[v0.1.22](./release-notes/v0.1.22.md) targets the published Harness `0.2.0-rc.2` packages and retains script-free Git installation. This plugin release uses npm `latest`; the recommended host is Harness `0.2.0-rc.2` (its `next` channel). See the exact [support matrix](./compatibility.json).
+[v0.1.24-rc.1](./release-notes/v0.1.24-rc.1.md) fixes team identity, member model routing, quality and repair gates, and cold fork recovery, and adds owner-configured member tool policies. This local integration candidate is not published to npm; the recommended host remains Harness `0.2.0-rc.2` (its `next` channel). See the exact [support matrix](./compatibility.json).
 
 ## Why AgentTeams?
 
@@ -49,26 +55,26 @@ The conversation card and activity panel use Harness's official locale service. 
 
 ## Install and choose versions
 
-**Recommended pair: DeepSeek Harness `0.2.0-rc.2` + AgentTeams `0.1.22`. The host remains an RC.**
+**The `0.1.24-rc.1` artifact is a local integration candidate, not an npm release. The published recommendation remains upstream v0.1.23 with Harness `0.2.0-rc.2`.**
 
 | Use case | DeepSeek Harness | AgentTeams plugin |
 | --- | --- | --- |
-| **Recommended** | **`0.2.0-rc.2`** | **`0.1.22`** |
-| Previous recommended RC | `0.1.7-rc.2` | `0.1.22` |
-| Legacy RC | `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.5-rc.3` | `0.1.22` |
-| Retaining an older RC | `0.1.2-rc.1` | `0.1.22` |
-| Developer Alpha testing | `0.1.2-alpha.5` | `0.1.22` |
-| Retaining an older Alpha | `0.1.2-alpha.2` | `0.1.22` |
+| **Recommended** | **`0.2.0-rc.2`** | **`0.1.24-rc.1`** |
+| Previous recommended RC | `0.1.7-rc.2` | `0.1.24-rc.1` |
+| Legacy RC | `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.5-rc.3` | `0.1.24-rc.1` |
+| Retaining an older RC | `0.1.2-rc.1` | `0.1.24-rc.1` |
+| Developer Alpha testing | `0.1.2-alpha.5` | `0.1.24-rc.1` |
+| Retaining an older Alpha | `0.1.2-alpha.2` | `0.1.24-rc.1` |
 
 ### Desktop app
 
 In the app sidebar, open **Plugins → Add plugin** and enter the npm package spec:
 
 ```text
-@nanmicoder/dsh-agent-teams@0.1.22
+@nanmicoder/dsh-agent-teams@0.1.24-rc.1
 ```
 
-Install it, then choose **Enable now**. If the host asks for a restart, restart the desktop app. Use the package spec above for the published build; an npm or GitHub webpage URL is not the same install source. For Git installation, use a commit containing the verified build outputs described below.
+Install it, then choose **Enable now**. If the host asks for a restart, restart the desktop app. The candidate package spec above is not published; install the verified local TGZ instead. an npm or GitHub webpage URL is not the same install source. For Git installation, use a commit containing the verified build outputs described below.
 
 The desktop app supplies its own Harness core and package manager. Upgrading the global CLI does not upgrade that core, and an ordinary standalone CLI cannot manage its desktop profile. The CLI carrier installed by the desktop app can manage that profile in `0.2.0-rc.2`. Check the embedded core against the compatibility list. Harness `0.2.0-rc.2` is now the exact published target; its RC status is unchanged. The earlier source-only `0.2.0` prediction is no longer a support declaration. See the [release migration evidence](./docs/harness-0.2.0-rc.2/README.md).
 
@@ -86,10 +92,10 @@ Skip this if you already run this version. Alpha is opt-in: select an exact Alph
 Install or upgrade from npm (pinned to this `latest` release):
 
 ```sh
-dsh plugin --profile web add --save-exact @nanmicoder/dsh-agent-teams@0.1.22
+dsh plugin --profile web add --save-exact @nanmicoder/dsh-agent-teams@0.1.24-rc.1
 ```
 
-For a CLI-managed installation, replace `web` with your active CLI profile. **Stop and restart that profile's Harness process, then refresh the browser.** Installing the plugin does not upgrade Harness; the host and plugin have independent `latest` channels.
+For a CLI-managed installation, replace `web` with your active CLI profile; use a local TGZ rather than the unpublished candidate npm spec. **Stop and restart that profile's Harness process, then refresh the browser.** Installing the plugin does not upgrade Harness; the host and plugin have independent `latest` channels.
 
 For Git installation, use a Git package spec pinned to a commit containing the verified server, client, and type build outputs in `lib/`, rather than an npm webpage URL. The repository distributes these outputs so installation does not need a `prepare` hook or build-script approval. Source maintainers must run `pnpm build` and update the committed outputs whenever the source changes. Existing npm releases remain immutable.
 
@@ -160,9 +166,25 @@ Defaults work without extra setup. A trusted profile can override member behavio
     memberModel: deepseek-v4
     memberMaxDepth: 0
     maxMembers: 8
+    toolPolicies:
+      researcher:
+        allow: [read, glob, grep]
+      implementer:
+        deny: [web_search]
 ```
 
 `memberMaxDepth` defaults to `0`: team members cannot create nested subagents. Set `1` to explicitly permit one descendant level; the limit also covers runtime/code-tool calls. Default members report through team messages only, avoiding duplicate native parent reports. Idle roster members make no model requests. Task assignments start distinct turns; coordination joins the nearest model step. Acceptance and consumption are tracked separately. Removal/archive drains the selected branch and its pending input before reporting success.
+
+`toolPolicies` is owner configuration: reusable per-member tool policies keyed by id. A member *selects* one by id — `tool_policy` on `agent_teams_add_member`, a member row of an inline `plan`, or a profile member row. The Captain model can select a declared policy but can never submit raw allow/deny lists or invent one at runtime.
+
+- `deny` hides the named global tools from that member's schemas and rejects their invocation.
+- `allow` keeps only the named global tools. The four coordination tools (`agent_teams_claim_task`, `agent_teams_update_task`, `agent_teams_send_message`, `agent_teams_status`) are always added to an allow list.
+- The captain-only tool list is always denied and cannot be reopened by a policy; a policy may not deny a required coordination tool.
+- Unknown ids, empty policies, and empty lists fail at mount or before a member is persisted.
+- `agent_teams_status` shows the selected policy id per member; the complete resolved filter is kept in `team.json` for audit, and the child's durable descriptor reapplies it after a restart.
+- Teams and members created without a policy keep their previous tool set and record shape. An empty `tool_policy` on `agent_teams_edit_plan` clears a staged member's policy.
+
+This is model tool visibility and invocation policy for global tools, not an OS sandbox or an authorization boundary.
 
 `memberProvider` is the sub-agent runtime backend (`spawn` / `fork`), not an LLM provider. Cross-LLM-provider routing uses the optional `provider` + `model` fields of `agent_teams_add_member`; `memberModel` is only a model default for all members. A member on the captain's current provider/model inherits the captain's reasoning effort, while a changed provider or model automatically uses the target model's default. To request a particular effort, pass the optional `reasoning_effort` field — one of the target model's supported effort ids, or `"default"` to force the model's own default.
 
