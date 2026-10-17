@@ -1,0 +1,7 @@
+# DSH 0.2.1-alpha.5 source compatibility (local candidate)
+
+Pinned Portable host source: `73a10371d6638220ed3daaf11069cbd51fbd5d36` in `/home/xuxw/gitcode/self-deepseek/deepseek-harness`. This is an unsigned local-test Portable build, not an official Windows release.
+
+The candidate package adds exact `0.2.1-alpha.5` to its DSH peer declarations and sourceCandidates policy. The repository's frozen `0.2.0-rc.2` development dependency baseline is unchanged. In an isolated worktree at plugin source commit `0fa6704b3c9da7d91f805911542a0f4b1bbb10af`, `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm build`, and `pnpm verify` passed; the resulting TGZ metadata was accepted by this host's `evaluatePluginCompatibility` without an exemption.
+
+**Not yet runtime-verified:** `scripts/harness-source-verify.mjs --prepare-only` stopped at `Cannot resolve @deepseek-ai/dsh-deepseek-account dependency @deepseek-ai/dsh-util-values`. The host checkout has the `0.2.1-alpha.5` workspace package but its current installation lacks the corresponding `node_modules` link. This does not demonstrate a plugin incompatibility, nor does it prove runtime compatibility. No Agent Teams lifecycle, member spawn, Windows Portable profile mount, or GUI acceptance is claimed. Reproduce the full source closure and runtime scenarios using a complete isolated host installation before promoting this candidate to supported status.
