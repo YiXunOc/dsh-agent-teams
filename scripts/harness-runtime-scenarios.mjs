@@ -64,6 +64,9 @@ for (const scenario of selectedScenarios) {
   disabled: true
 - id: headless-runner
   disabled: true
+- id: credentials
+  name: '@deepseek-ai/dsh-credentials-local'
+  disabled: false
 - insert:
     - id: runtime-lab-webserver
       name: '@deepseek-ai/dsh-host-webserver'

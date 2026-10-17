@@ -202,6 +202,8 @@ const ctx = {
             label: spec.label,
             agentProvider: spec.request?.agentOptions?.provider ?? 'fake',
             agentModel: spec.request?.agentOptions?.model ?? 'fake-model',
+            persona: spec.request?.persona,
+            toolFilter: spec.request?.toolFilter,
           },
         }]
       }

@@ -17,9 +17,11 @@ import { installModelSelection, type Agent, type ModelSelection } from '@deepsee
 // Declaration merge only: makes ctx.subagents visible.
 import { foldSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import { createUserMessage, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import * as dshSession from '@deepseek-ai/dsh-session'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { join } from 'node:path'
 import { guardSubagentDelivery, installContinuableMemberSetup, memberToolFilter, queueMemberPrompt, restrictableToolNames, startMemberWithLenientFilter, steerMemberPrompt, sessionOwnEvents } from './harness-compat.ts'
+import { memberSpawnRelaxableDeny } from './tool-policies.ts'
 import { markMailboxDelivered, appendMailbox, CAPTAIN_KEY, createMessage, readRetiredMemberIds, readTeamSync, readTeam, releaseMailboxDelivery, withTeamLock, writeTeam } from './state.ts'
 import { mailboxPrompt } from './mailbox.ts'
 import { nearestLiveLead } from './lineage.ts'
@@ -50,6 +52,32 @@ export interface MemberRuntimeConfig {
   executionPrompt?: string
   /** Plugin-wide fallback route. */
   fallback?: { provider: string; model: string }
+}
+
+const MEMBER_COMPOSITION_RECORD = 'plugin:agent-teams/member-composition'
+
+function savedMemberComposition(session: Session, teamId: string, memberName: string, parentSessionId: string): { persona: string; toolFilter: MemberToolFilter; relaxableDeny: readonly string[] } | undefined {
+  const record = sessionOwnEvents(session).find(event => (event.type as string) === MEMBER_COMPOSITION_RECORD && (event as unknown as { ignorable?: boolean }).ignorable === true)
+  if (record === undefined) return undefined
+  const value: unknown = record.data
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('agent-teams: invalid member composition record')
+  const data = value as Record<string, unknown>
+  const filter = data['toolFilter']
+  if (data['teamId'] !== teamId || data['memberName'] !== memberName || data['parentSessionId'] !== parentSessionId
+    || typeof data['persona'] !== 'string' || data['persona'] === ''
+    || typeof filter !== 'object' || filter === null || Array.isArray(filter)) {
+    throw new Error('agent-teams: invalid member composition record')
+  }
+  const toolFilter = filter as Record<string, unknown>
+  const allow = toolFilter['allow'], deny = toolFilter['deny'], relaxable = data['relaxableDeny']
+  if ((allow === undefined && deny === undefined)
+    || (allow !== undefined && (!Array.isArray(allow) || allow.some(item => typeof item !== 'string')))
+    || (deny !== undefined && (!Array.isArray(deny) || deny.some(item => typeof item !== 'string')))
+    || (relaxable !== undefined && (!Array.isArray(relaxable) || relaxable.some(item => typeof item !== 'string'
+      || !memberSpawnRelaxableDeny(undefined).includes(item) || !Array.isArray(deny) || !deny.includes(item))))) {
+    throw new Error('agent-teams: invalid member composition filter')
+  }
+  return { persona: data['persona'], toolFilter: filter as MemberToolFilter, relaxableDeny: (relaxable ?? []) as string[] }
 }
 
 /** Durable provider/model/reasoning snapshot for one member. */
@@ -137,6 +165,8 @@ export function composeMemberRoute(
 
 /** Process-local bridge between spawn admission and synchronous child setup. */
 export interface MemberSelectionRuntime {
+  /** Modern providers require scoped composition before the first request. */
+  readonly supportsScopedComposition?: boolean
   /** Trusted fresh-child admission, before the durable member id is written. */
   isPendingMember(agent: Agent): boolean
   /** Make one selection visible while Harness materializes the fresh child. */
@@ -145,6 +175,7 @@ export interface MemberSelectionRuntime {
     label: string,
     selection: MemberLlmSelection,
     operation: () => Promise<T>,
+    composition?: { persona: string; toolFilter: MemberToolFilter; relaxableDeny?: readonly string[] },
   ): Promise<T>
 }
 
@@ -621,8 +652,10 @@ export function installMemberSelectionRuntime(
   ctx: Context,
   stateDir: string,
   onFailureSettled?: (workspace: string, teamId: string, memberName: string) => Promise<void>,
+  writeComposition?: (session: Session, type: string, data: unknown) => unknown,
 ): MemberSelectionRuntime {
   const pending = new Map<string, MemberLlmSelection>()
+  const pendingComposition = new Map<string, { persona: string; toolFilter: MemberToolFilter; relaxableDeny?: readonly string[] }>()
   installContinuableMemberSetup(ctx, (childCtx, child) => {
     const descriptor = foldSubagentDescriptor(sessionOwnEvents(child.session))
     if (descriptor?.mode !== 'continuable' || !descriptor.label.startsWith(MEMBER_LABEL_PREFIX)) {
@@ -639,6 +672,41 @@ export function installMemberSelectionRuntime(
     const workspace = child.session.header.cwd ?? process.cwd()
     const stateRoot = join(workspace, stateDir)
     const key = pendingSelectionKey(parentSessionId, descriptor.label)
+    const freshComposition = pendingComposition.get(key)
+    const historicalComposition = descriptor.persona !== undefined && descriptor.toolFilter !== undefined
+    const savedComposition = freshComposition === undefined && !historicalComposition
+      ? savedMemberComposition(child.session, teamId, memberName, parentSessionId) : undefined
+    if (!historicalComposition && freshComposition === undefined && savedComposition === undefined) {
+      throw new Error('agent-teams: saved member composition is unavailable')
+    }
+    const composition = freshComposition ?? savedComposition
+    if (composition !== undefined) {
+      const relaxableDeny = savedComposition?.relaxableDeny ?? []
+      let accepted = composition.toolFilter
+      if (freshComposition === undefined && relaxableDeny.length > 0) {
+        // A registry view may be unavailable on some hosts. In that case the
+        // unchanged filter fails closed instead of dropping any deny name.
+        const known = restrictableToolNames(child)
+        if (known !== undefined) accepted = { ...composition.toolFilter,
+          deny: composition.toolFilter.deny.filter(name => known.has(name) || !relaxableDeny.includes(name)) }
+      }
+      childCtx.tools.restrict(accepted)
+      childCtx.systemPrompt.section({
+        name: 'deployment:persona-prefix',
+        order: childCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
+        text: composition.persona,
+      })
+      if (freshComposition !== undefined) {
+        const append = writeComposition ?? (dshSession as typeof dshSession & {
+          appendPluginRecord?: (session: Session, type: string, data: unknown) => unknown
+        }).appendPluginRecord
+        if (typeof append !== 'function') throw new Error('agent-teams: member composition persistence is unavailable')
+        append(child.session, MEMBER_COMPOSITION_RECORD, {
+          teamId, memberName, parentSessionId, persona: composition.persona, toolFilter: composition.toolFilter,
+          relaxableDeny: composition.relaxableDeny ?? [],
+        })
+      }
+    }
     // Internal settlement wakeups bypass the public delivery guard. Recheck
     // exact durable membership on every proposed step, including cold resume.
     const disposeAdmission = childCtx.on('agent/pre-step', async (payload, next) => {
@@ -742,6 +810,7 @@ export function installMemberSelectionRuntime(
   })
 
   return {
+    supportsScopedComposition: true,
     isPendingMember(agent) {
       const parent = agent.session.header.parentSession
       const descriptor = foldSubagentDescriptor(sessionOwnEvents(agent.session))
@@ -753,16 +822,19 @@ export function installMemberSelectionRuntime(
       label: string,
       selection: MemberLlmSelection,
       operation: () => Promise<T>,
+      composition?: { persona: string; toolFilter: MemberToolFilter; relaxableDeny?: readonly string[] },
     ): Promise<T> {
       const key = pendingSelectionKey(parentSessionId, label)
       if (pending.has(key)) {
         throw new Error(`member model selection is already pending for "${label}"`)
       }
       pending.set(key, selection)
+      if (composition !== undefined) pendingComposition.set(key, composition)
       try {
         return await operation()
       } finally {
         pending.delete(key)
+        pendingComposition.delete(key)
       }
     },
   }
@@ -891,10 +963,15 @@ export async function spawnMember(
   if (provider.prepareContinuable === undefined) {
     throw new Error(`agent-teams: provider "${config.provider}" does not support continuable members`)
   }
-  if (!provider.capabilities.persona) {
+  const capabilities = provider.capabilities as typeof provider.capabilities & { agentPreset?: boolean }
+  const scopedComposition = capabilities.agentPreset === true && capabilities.persona === undefined
+  if (scopedComposition && !selections.supportsScopedComposition) {
+    throw new Error('agent-teams: member composition setup is unavailable for this provider')
+  }
+  if (!scopedComposition && !provider.capabilities.persona) {
     throw new Error(`agent-teams: provider "${config.provider}" cannot apply a member persona`)
   }
-  if (!provider.capabilities.toolFilter) {
+  if (!scopedComposition && !provider.capabilities.toolFilter) {
     throw new Error(`agent-teams: provider "${config.provider}" cannot restrict captain-only tools for members`)
   }
   const label = `${MEMBER_LABEL_PREFIX}${team.id}:${member.name}`
@@ -906,6 +983,10 @@ export async function spawnMember(
   let acceptedFilter = requestedFilter
   // Preserve the owner-declared allow/deny policy and persist the exact filter
   // the Host accepted. Only the built-in deny entries can be relaxed on retry.
+  const scopedMember = scopedComposition ? {
+    persona: memberPersona(team, member, stateDir, config.executionPrompt), toolFilter: requestedFilter,
+    relaxableDeny: (relaxableDeny ?? memberSpawnRelaxableDeny(undefined)).filter(name => requestedFilter.deny.includes(name)),
+  } : undefined
   const runtime = ctx.subagents as typeof ctx.subagents & {
     startActivation?: (spec: unknown) => Promise<{ childId: SessionId }>
     startContinuable: (spec: unknown) => Promise<{ childId: SessionId }>
@@ -913,14 +994,14 @@ export async function spawnMember(
   const start = await selections.withPending(captain.id, label, llmSelection, () => (
     startMemberWithLenientFilter(toolFilter => {
       acceptedFilter = toolFilter
+      if (scopedMember !== undefined) scopedMember.toolFilter = toolFilter
       const spec = {
         provider: config.provider,
         label,
         request: {
           prompt: [{ type: 'text' as const, text: initialPrompt ?? memberWelcome(team, member.name) }],
           parent: captain,
-          persona: memberPersona(team, member, stateDir, config.executionPrompt),
-          toolFilter,
+          ...scopedComposition ? {} : { persona: memberPersona(team, member, stateDir, config.executionPrompt), toolFilter },
           agentOptions: {
             provider: llmSelection.provider,
             model: llmSelection.model,
@@ -935,12 +1016,11 @@ export async function spawnMember(
         ? runtime.startActivation({ ...spec, delivery: 'parent' })
         : runtime.startContinuable(spec)
     }, requestedFilter, relaxableDeny)
-  ))
+  ), scopedMember)
   member.id = start.childId
-  // Only a policy member carries a persisted filter snapshot; a member without
-  // a policy keeps the previous record shape and behavior. The descriptor, not
-  // this snapshot, is what reapplies the filter on a cold resume.
-  if (member.toolFilter !== undefined) member.toolFilter = { ...acceptedFilter }
+  // Modern descriptors no longer store tool restrictions: persist the exact
+  // accepted filter for cold resume, including the default member policy.
+  if (scopedComposition || member.toolFilter !== undefined) member.toolFilter = { ...acceptedFilter }
 }
 
 /**

@@ -57,6 +57,7 @@ async function fixture(t, { captainStatus = 'idle', fallback, captainOffline = f
       events: [{ type: 'subagent/descriptor', data: {
         version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker',
         agentProvider: 'fake', agentModel: 'primary',
+        persona: 'Legacy test member', toolFilter: { deny: ['agent_teams_create'] },
       } }],
       append(type, data) { sessionEvents.push({ type, data }) },
     },

@@ -1487,6 +1487,8 @@ function descriptorEvent(label, agentProvider = 'descriptor-provider', agentMode
       label,
       agentProvider,
       agentModel,
+      persona: 'Legacy test member',
+      toolFilter: { deny: ['agent_teams_create'] },
     },
   }
 }

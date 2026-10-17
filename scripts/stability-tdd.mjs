@@ -115,7 +115,7 @@ await test('next-step steering preserves the native delivery modes across all th
 
 await test('internal wakeups and cold admission are rejected for stopped or retired members', async t => {
   const h = await fixture(t), hooks = new Map()
-  const child = { id: 'worker', session: { header: { cwd: h.workspace, parentSession: 'captain' }, ownEvents: () => [{ type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker' } }] } }
+  const child = { id: 'worker', session: { header: { cwd: h.workspace, parentSession: 'captain' }, ownEvents: () => [{ type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', persona: 'Legacy test member', toolFilter: { deny: ['agent_teams_create'] } } }] } }
   let setup
   h.ctx.subagents = { registerContinuableSetup(fn) { setup = fn } }
   installMemberSelectionRuntime(h.ctx, '.agent-teams')

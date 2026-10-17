@@ -105,10 +105,16 @@ export declare function composeMemberRoute(request: Pick<MemberLlmSelectionReque
 }): MemberRouteResolution | undefined;
 /** Process-local bridge between spawn admission and synchronous child setup. */
 export interface MemberSelectionRuntime {
+    /** Modern providers require scoped composition before the first request. */
+    readonly supportsScopedComposition?: boolean;
     /** Trusted fresh-child admission, before the durable member id is written. */
     isPendingMember(agent: Agent): boolean;
     /** Make one selection visible while Harness materializes the fresh child. */
-    withPending<T>(parentSessionId: string, label: string, selection: MemberLlmSelection, operation: () => Promise<T>): Promise<T>;
+    withPending<T>(parentSessionId: string, label: string, selection: MemberLlmSelection, operation: () => Promise<T>, composition?: {
+        persona: string;
+        toolFilter: MemberToolFilter;
+        relaxableDeny?: readonly string[];
+    }): Promise<T>;
 }
 /**
  * Validate a resolved roster against every provider catalog before any child
@@ -141,7 +147,7 @@ interface FailedMemberAttempt {
     readonly task?: Pick<TeamTask, 'id' | 'attempt' | 'attemptId'>;
 }
 /** How a final member turn failure relates to the durable record. */
-export type MemberFailureDisposition =
+export type MemberFailureDisposition = 
 /** A live observed attempt was failed and its task marked failed. */
 'failed_attempt'
 /** The work had already settled; only a durable captain note was added. */
@@ -223,7 +229,7 @@ export declare function resolveMemberLlmSelection(ctx: Context, captain: Agent, 
  * record. Legacy members without a complete saved route retain Harness's
  * descriptor provider/model behavior.
  */
-export declare function installMemberSelectionRuntime(ctx: Context, stateDir: string, onFailureSettled?: (workspace: string, teamId: string, memberName: string) => Promise<void>): MemberSelectionRuntime;
+export declare function installMemberSelectionRuntime(ctx: Context, stateDir: string, onFailureSettled?: (workspace: string, teamId: string, memberName: string) => Promise<void>, writeComposition?: (session: Session, type: string, data: unknown) => unknown): MemberSelectionRuntime;
 /**
  * The member's system prompt (persona), shadowing the deployment persona for
  * that child. Self-contained: it replaces the whole persona section.

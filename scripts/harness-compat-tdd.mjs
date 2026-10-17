@@ -180,6 +180,10 @@ await test('synchronous modern setup selects the first request, deduplicates eve
   const ctx = scope({ subagents: modernRuntime() })
   const bridge = installMemberSelectionRuntime(ctx, '.agent-teams')
   const agent = child()
+  agent.session.ownEvents = () => [{ type: 'subagent/descriptor', data: {
+    version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker',
+    agentProvider: 'primary', agentModel: 'model', persona: 'Legacy member', toolFilter: { deny: ['agent_teams_create'] },
+  } }]
   await bridge.withPending('captain', 'agent-teams:team:worker', {
     provider: 'selected', model: 'selected-model', reasoningEffort: 'high',
   }, async () => {
@@ -239,6 +243,127 @@ await test('a child inheriting another member descriptor does not acquire member
   ctx.dispose()
 })
 
+await test('alpha.4 cold resume rebuilds persona and tool policy from the durable member', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-compat-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  const filter = { deny: ['agent_teams_create'] }
+  await createTeamDir(join(workspace, '.agent-teams'), {
+    id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 0, tasks: [],
+    members: [{ id: 'member-id', name: 'worker', role: 'analyst', status: 'idle', joinedAt: 1,
+      provider: 'primary', model: 'model', toolFilter: filter }],
+  })
+  const ctx = scope({ subagents: { ...modernRuntime(), getProvider: () => ({ capabilities: { agentPreset: true } }) } })
+  t.after(() => ctx.dispose())
+  installMemberSelectionRuntime(ctx, '.agent-teams')
+  const agent = child({ workspace })
+  agent.session.ownEvents = () => [
+    { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', agentProvider: 'primary', agentModel: 'model' } },
+    { type: 'plugin:agent-teams/member-composition', ignorable: true, data: {
+      teamId: 'team', memberName: 'worker', parentSessionId: 'captain', persona: 'You are worker, analyst', toolFilter: filter,
+    } },
+  ]
+  const sections = [], filters = []
+  agent.ctx.systemPrompt = { section: value => { sections.push(value); return () => {} }, getSectionOrder: () => 0 }
+  agent.ctx.tools = { restrict: value => { filters.push(value); return () => {} } }
+  ctx.emit('agent/session-start', { agent, source: 'resume' })
+  assert.match(sections[0].text, /analyst/)
+  assert.deepEqual(filters[0], filter)
+})
+
+await test('alpha.4 cold resume trusts the member Session snapshot over a modified workspace filter', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-compat-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  await createTeamDir(join(workspace, '.agent-teams'), {
+    id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 0, tasks: [],
+    members: [{ id: 'member-id', name: 'worker', status: 'idle', joinedAt: 1, provider: 'primary', model: 'model',
+      toolFilter: { deny: ['other-tool'] } }],
+  })
+  const ctx = scope({ subagents: { ...modernRuntime(), getProvider: () => undefined } })
+  t.after(() => ctx.dispose())
+  installMemberSelectionRuntime(ctx, '.agent-teams')
+  const agent = child({ workspace })
+  agent.session.ownEvents = () => [
+    { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', agentProvider: 'primary', agentModel: 'model' } },
+    { type: 'plugin:agent-teams/member-composition', ignorable: true, data: {
+      teamId: 'team', memberName: 'worker', parentSessionId: 'captain', persona: 'Trusted role', toolFilter: { deny: ['agent_teams_create'] },
+    } },
+  ]
+  const sections = [], filters = []
+  agent.ctx.systemPrompt = { section: value => { sections.push(value); return () => {} }, getSectionOrder: () => 0 }
+  agent.ctx.tools = { restrict: value => { filters.push(value); return () => {} } }
+  ctx.emit('agent/session-start', { agent, source: 'resume' })
+  assert.equal(sections[0].text, 'Trusted role')
+  assert.deepEqual(filters[0], { deny: ['agent_teams_create'] })
+})
+
+await test('alpha.4 cold resume drops only a retired built-in deny name', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-compat-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  await createTeamDir(join(workspace, '.agent-teams'), {
+    id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 0, tasks: [],
+    members: [{ id: 'member-id', name: 'worker', status: 'idle', joinedAt: 1, provider: 'primary', model: 'model' }],
+  })
+  const ctx = scope({ subagents: modernRuntime() })
+  t.after(() => ctx.dispose())
+  installMemberSelectionRuntime(ctx, '.agent-teams')
+  const agent = child({ workspace })
+  agent.session.ownEvents = () => [
+    { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', agentProvider: 'primary', agentModel: 'model' } },
+    { type: 'plugin:agent-teams/member-composition', ignorable: true, data: {
+      teamId: 'team', memberName: 'worker', parentSessionId: 'captain', persona: 'Trusted',
+      toolFilter: { deny: ['agent_teams_create', 'subagent'] }, relaxableDeny: ['subagent'],
+    } },
+  ]
+  const applied = []
+  agent.ctx.systemPrompt = { section: () => () => {}, getSectionOrder: () => 0 }
+  agent.ctx.tools = { view: () => ({ restrictableNames: new Set(['agent_teams_create']) }), restrict: value => {
+    applied.push(value)
+    if (value.deny.includes('subagent')) throw Error('tools.restrict() names unknown global tool "subagent"; known global tools: "agent_teams_create"')
+    return () => {}
+  } }
+  ctx.emit('agent/session-start', { agent, source: 'resume' })
+  assert.deepEqual(applied.at(-1), { deny: ['agent_teams_create'] })
+})
+
+await test('alpha.4 cold resume retains owner-denied names even when host calls them unknown', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-compat-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  await createTeamDir(join(workspace, '.agent-teams'), {
+    id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 0, tasks: [],
+    members: [{ id: 'member-id', name: 'worker', status: 'idle', joinedAt: 1, provider: 'primary', model: 'model' }],
+  })
+  const ctx = scope({ subagents: modernRuntime() })
+  t.after(() => ctx.dispose())
+  installMemberSelectionRuntime(ctx, '.agent-teams')
+  const agent = child({ workspace })
+  agent.session.ownEvents = () => [
+    { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', agentProvider: 'primary', agentModel: 'model' } },
+    { type: 'plugin:agent-teams/member-composition', ignorable: true, data: {
+      teamId: 'team', memberName: 'worker', parentSessionId: 'captain', persona: 'Trusted',
+      toolFilter: { deny: ['agent_teams_create', 'subagent'] }, relaxableDeny: [],
+    } },
+  ]
+  agent.ctx.systemPrompt = { section: () => () => {}, getSectionOrder: () => 0 }
+  agent.ctx.tools = { restrict: () => { throw Error('tools.restrict() names unknown global tool "subagent"; known global tools: "agent_teams_create"') } }
+  ctx.emit('agent/session-start', { agent, source: 'resume' })
+  await assert.rejects(selection(agent), /unknown global tool "subagent"/)
+})
+
+await test('alpha.4 cold resume rejects a missing persisted tool filter before any request', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-compat-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  await createTeamDir(join(workspace, '.agent-teams'), {
+    id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 0, tasks: [],
+    members: [{ id: 'member-id', name: 'worker', status: 'idle', joinedAt: 1, provider: 'primary', model: 'model' }],
+  })
+  const ctx = scope({ subagents: { ...modernRuntime(), getProvider: () => ({ capabilities: { agentPreset: true } }) } })
+  t.after(() => ctx.dispose())
+  installMemberSelectionRuntime(ctx, '.agent-teams')
+  const agent = child({ workspace })
+  ctx.emit('agent/session-start', { agent, source: 'resume' })
+  await assert.rejects(selection(agent), /saved member composition is unavailable/)
+})
+
 for (const fallbackActive of [false, true]) {
   await test(`cold resume restores route and effort coherently (fallbackActive=${fallbackActive})`, async t => {
     const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-compat-'))
@@ -255,6 +380,10 @@ for (const fallbackActive of [false, true]) {
     t.after(() => ctx.dispose())
     installMemberSelectionRuntime(ctx, '.agent-teams')
     const agent = child({ workspace })
+    agent.session.ownEvents = () => [{ type: 'subagent/descriptor', data: {
+      version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker',
+      agentProvider: 'primary', agentModel: 'model', persona: 'Legacy member', toolFilter: { deny: ['agent_teams_create'] },
+    } }]
     ctx.emit('agent/session-start', { agent, source: 'resume' })
     assert.deepEqual(await selection(agent), fallbackActive
       ? { provider: 'backup', model: 'backup-model' }
@@ -273,6 +402,85 @@ for (const fallbackActive of [false, true]) {
     }
   })
 }
+
+await test('alpha.4 spawn applies member persona and tool policy before its first request', async () => {
+  const registered = []
+  let received
+  const ctx = scope({ subagents: {
+    [deliverKey]: async () => {}, sendMessage: async () => {},
+    getProvider: () => ({ prepareContinuable() {}, capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true } }),
+    startActivation: async spec => {
+      received = spec
+      const sections = [], filters = [], records = []
+      const agent = child()
+      agent.session.append = (type, data) => { records.push({ type, ignorable: true, data }) }
+      agent.session.ownEvents = () => [{ type: 'subagent/descriptor', data: {
+        version: 3, mode: 'continuable', provider: 'spawn', label: spec.label,
+        agentProvider: 'chosen', agentModel: 'model',
+      } }]
+      agent.ctx.systemPrompt = { section: value => { sections.push(value); return () => {} }, getSectionOrder: () => 0 }
+      agent.ctx.tools = { restrict: value => { filters.push(value); return () => {} } }
+      for (const listener of ctx.listeners.get('agent/created') ?? []) listener({ agent, source: 'startup' })
+      registered.push({ sections, filters, records })
+      return { childId: 'member-id' }
+    },
+  } })
+  const selections = installMemberSelectionRuntime(ctx, '.agent-teams', undefined,
+    (session, type, data) => session.append(type, data))
+  const captain = { id: 'captain' }
+  const team = { id: 'team', name: 'Team', captainSessionId: captain.id, members: [], tasks: [], createdAt: 1, taskSeq: 0 }
+  const member = { id: '', name: 'worker', role: 'reviewer', joinedAt: 1, status: 'idle', toolFilter: { deny: ['agent_teams_create'] } }
+  await spawnMember(ctx, { provider: 'spawn', maxDepth: 0 }, { ...selections, supportsScopedComposition: true },
+    { provider: 'chosen', model: 'model' }, captain, team, member, '.agent-teams', signal, 'assignment', member.toolFilter)
+  assert.equal(received.request.persona, undefined)
+  assert.equal(received.request.toolFilter, undefined)
+  assert.match(registered[0].sections[0].text, /reviewer/)
+  assert.deepEqual(registered[0].filters[0], member.toolFilter)
+  assert.equal(registered[0].records[0].type, 'plugin:agent-teams/member-composition')
+  assert.equal(registered[0].records[0].data.persona, registered[0].sections[0].text)
+  assert.deepEqual(registered[0].records[0].data.toolFilter, registered[0].filters[0])
+  assert.equal(member.id, 'member-id')
+})
+
+await test('alpha.4 default member persists its effective deny policy for cold resume', async () => {
+  let applied
+  const ctx = scope({ subagents: {
+    [deliverKey]: async () => {}, sendMessage: async () => {},
+    getProvider: () => ({ prepareContinuable() {}, capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true } }),
+    startActivation: async spec => {
+      const agent = child()
+      agent.session.ownEvents = () => [{ type: 'subagent/descriptor', data: {
+        version: 3, mode: 'continuable', provider: 'spawn', label: spec.label,
+        agentProvider: 'primary', agentModel: 'model',
+      } }]
+      agent.ctx.systemPrompt = { section: () => () => {}, getSectionOrder: () => 0 }
+      agent.ctx.tools = { restrict: value => { applied = value; return () => {} } }
+      for (const listener of ctx.listeners.get('agent/created') ?? []) listener({ agent, source: 'startup' })
+      return { childId: 'member-id' }
+    },
+  } })
+  const selections = installMemberSelectionRuntime(ctx, '.agent-teams', undefined,
+    () => undefined)
+  const captain = { id: 'captain' }
+  const team = { id: 'team', name: 'Team', captainSessionId: captain.id, members: [], tasks: [], createdAt: 1, taskSeq: 0 }
+  const member = { id: '', name: 'worker', joinedAt: 1, status: 'idle' }
+  await spawnMember(ctx, { provider: 'spawn', maxDepth: 0 }, selections,
+    { provider: 'primary', model: 'model' }, captain, team, member, '.agent-teams', signal)
+  assert.ok(applied.deny.includes('agent_teams_create'))
+  assert.deepEqual(member.toolFilter, applied)
+})
+
+await test('alpha.4 provider rejects spawning without the scoped member setup', async () => {
+  const ctx = { subagents: {
+    getProvider: () => ({ prepareContinuable() {}, capabilities: { agentOptions: true, agentPreset: true, outputSchema: true, depthLimit: true } }),
+  } }
+  const captain = { id: 'captain' }
+  const team = { id: 'team', name: 'Team', captainSessionId: captain.id, members: [], tasks: [], createdAt: 1, taskSeq: 0 }
+  const member = { id: '', name: 'worker', joinedAt: 1, status: 'idle' }
+  await assert.rejects(spawnMember(ctx, { provider: 'spawn' }, { withPending: (_p, _l, _s, run) => run() },
+    { provider: 'primary', model: 'model' }, captain, team, member, '.agent-teams', signal), /member composition setup is unavailable/)
+  assert.equal(member.id, '')
+})
 
 await test('spawn explicitly passes reasoning effort, preserving persona and tool filters', async () => {
   let received
