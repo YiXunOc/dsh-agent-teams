@@ -20,7 +20,7 @@ import { createUserMessage, LlmError, ReasoningEffortId } from '@deepseek-ai/dsh
 import * as dshSession from '@deepseek-ai/dsh-session'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { join } from 'node:path'
-import { guardSubagentDelivery, installContinuableMemberSetup, memberToolFilter, queueMemberPrompt, restrictableToolNames, startMemberWithLenientFilter, steerMemberPrompt, sessionOwnEvents } from './harness-compat.ts'
+import { guardSubagentDelivery, installContinuableMemberSetup, memberToolFilter, queueMemberPrompt, restrictableToolNames, startMemberWithLenientFilter, steerMemberPrompt, sessionOwnEvents, usesManagedActivations } from './harness-compat.ts'
 import { memberSpawnRelaxableDeny } from './tool-policies.ts'
 import { markMailboxDelivered, appendMailbox, CAPTAIN_KEY, createMessage, readRetiredMemberIds, readTeamSync, readTeam, releaseMailboxDelivery, withTeamLock, writeTeam } from './state.ts'
 import { mailboxPrompt } from './mailbox.ts'
@@ -656,6 +656,7 @@ export function installMemberSelectionRuntime(
 ): MemberSelectionRuntime {
   const pending = new Map<string, MemberLlmSelection>()
   const pendingComposition = new Map<string, { persona: string; toolFilter: MemberToolFilter; relaxableDeny?: readonly string[] }>()
+  const pendingSetup = new Map<string, { persona: string; toolFilter: MemberToolFilter }>()
   installContinuableMemberSetup(ctx, (childCtx, child) => {
     const descriptor = foldSubagentDescriptor(sessionOwnEvents(child.session))
     if (descriptor?.mode !== 'continuable' || !descriptor.label.startsWith(MEMBER_LABEL_PREFIX)) {
@@ -1153,6 +1154,9 @@ export function installMemberDelegationGuard(ctx: Context, stateDir: string, max
     }
   }
   ctx.effect(() => {
+    const runtime = ctx.subagents as typeof ctx.subagents & {
+      startActivation?: (spec: { request: { parent: Agent } }) => Promise<unknown>
+    }
     const start = runtime.start
     const continuable = runtime.startContinuable
     const activation = (runtime as typeof runtime & { startActivation?: (spec: { request: { parent: Agent } }) => Promise<unknown> }).startActivation
