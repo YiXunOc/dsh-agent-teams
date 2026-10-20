@@ -720,10 +720,38 @@ export function installMemberSelectionRuntime(
       if (!admitted) return { kind: 'reject' }
       return next()
     })
+    // New activations no longer persist persona/toolFilter in host descriptors.
+    // Install them before the first request, and restore the exact saved values
+    // after a cold resume. Historical descriptors remain owned by Harness.
+    const savedTeam = pending.has(key) ? undefined : readTeamSync(stateRoot, teamId)
+    const savedMember = savedTeam?.captainSessionId === parentSessionId
+      ? savedTeam.members.find(member => member.id === child.id && member.name === memberName)
+      : undefined
+    const setup = pendingSetup.get(key) ?? savedMember?.runtimeSetup
+    if (usesManagedActivations(ctx.subagents) && savedMember !== undefined
+      && setup === undefined && descriptor.toolFilter === undefined) {
+      disposeAdmission()
+      throw new Error('agent-teams: saved member runtime setup is missing; refusing an unrestricted resume')
+    }
+    let disposeSetup = (): void => undefined
+    if (usesManagedActivations(ctx.subagents) && setup !== undefined) {
+      try {
+        const stopFilter = childCtx.tools.restrict(setup.toolFilter)
+        try {
+          const stopPersona = childCtx.systemPrompt.section({
+            name: 'deployment:persona-prefix',
+            order: childCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
+            text: setup.persona,
+          })
+          disposeSetup = () => { stopPersona(); stopFilter() }
+        } catch (error) { stopFilter(); throw error }
+      } catch (error) { disposeAdmission(); throw error }
+    }
+    const cleanupAdmission = (): void => { disposeSetup(); disposeAdmission() }
     let selection = pending.get(key)
     if (selection === undefined) {
       const team = readTeamSync(stateRoot, teamId)
-      if (team?.captainSessionId !== parentSessionId) return disposeAdmission
+      if (team?.captainSessionId !== parentSessionId) return cleanupAdmission
       const durableMember = team.members.find(member => member.name === memberName)
       selection = selectionFromMember(durableMember)
       if (selection !== undefined && (descriptor.agentProvider !== durableMember?.provider || descriptor.agentModel !== durableMember?.model)) {
@@ -776,7 +804,7 @@ export function installMemberSelectionRuntime(
       }
     })
     // Legacy teams still need failure reporting even without a saved route.
-    if (selection === undefined) return () => { disposeFailure(); disposeAdmission() }
+    if (selection === undefined) return () => { disposeFailure(); cleanupAdmission() }
     const selectionRef = { current: modelSelection(selection), assembled: undefined as ModelSelection | undefined }
     const disposeSelection = installModelSelection(childCtx, selectionRef)
     const fallback = selection.fallback
@@ -805,7 +833,7 @@ export function installMemberSelectionRuntime(
       disposeFallback()
       disposeSelection()
       disposeFailure()
-      disposeAdmission()
+      cleanupAdmission()
     }
   })
 
@@ -979,7 +1007,7 @@ export async function spawnMember(
   // captain-only deny list plus the depth entries this host registers.
   const requestedFilter = resolvedFilter ?? memberToolFilter(config.maxDepth, restrictableToolNames(captain))
   // The lenient retry may drop names this host reports unknown; keep the exact
-  // filter the host accepted so team.json and the child descriptor agree.
+  // filter the host accepted for the durable member setup.
   let acceptedFilter = requestedFilter
   // Preserve the owner-declared allow/deny policy and persist the exact filter
   // the Host accepted. Only the built-in deny entries can be relaxed on retry.
@@ -1095,7 +1123,6 @@ export function installRetiredMemberGuard(ctx: Context, stateDir: string): void 
 
 /** Bound all descendant creation, including renamed tools and code-runtime calls. */
 export function installMemberDelegationGuard(ctx: Context, stateDir: string, maxDepth: number): void {
-  const runtime = ctx.subagents
   let active = true
   const check = (parent: Agent): void => {
     if (!active) return

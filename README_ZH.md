@@ -75,12 +75,12 @@
 
 安装完成后点击「立即启用」；宿主提示需要重启时，重启桌面应用。候选包请使用经过验证的本地 TGZ，不要将上面的 npm 规格视为已发布。从 Git 安装时，请选用包含下方所述已验证构建产物的提交。
 
-桌面端自带 Harness 内核与包管理器，升级全局 CLI 不会升级桌面端；普通独立 CLI 不能管理桌面 profile，桌面端自带的 CLI carrier 在此版本可以管理。当前精确目标是已发布的 `0.2.0-rc.2`，仍属于 RC；此前源码预测的 `0.2.0` 已退出支持声明。详见[迁移验收记录](./docs/harness-0.2.0-rc.2/README.md)。
+桌面端自带 Harness 内核与包管理器，升级全局 CLI 不会升级桌面端；普通独立 CLI 不能管理桌面 profile，桌面端自带的 CLI carrier 在此版本可以管理。当前精确目标是已发布的 `0.2.1-rc.2`，仍属于 RC；此前源码预测的 `0.2.0` 已退出支持声明。详见[迁移验收记录](./docs/harness-0.2.1-rc.2/README.md)。
 
 ### CLI / Web：1. 安装 DeepSeek Harness
 
 ```sh
-npm install --global @deepseek-ai/dsh@0.2.0-rc.2
+npm install --global @deepseek-ai/dsh@0.2.1-rc.2
 dsh --version
 ```
 
@@ -88,7 +88,7 @@ dsh --version
 
 ### CLI / Web：2. 安装 AgentTeams 插件
 
-从 npm 安装或升级插件（命令锁定本次 `latest` 正式版）：
+从 npm 安装或升级插件（不带版本号时使用 npm `latest`，当前为正式版 `0.1.25`）：
 
 ```sh
 dsh plugin --profile web add --save-exact @nanmicoder/dsh-agent-teams@0.1.24-rc.1
