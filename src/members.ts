@@ -681,6 +681,10 @@ export function installMemberSelectionRuntime(
       throw new Error('agent-teams: saved member composition is unavailable')
     }
     const composition = freshComposition ?? savedComposition
+    const compositionDisposers: Array<() => void> = []
+    let disposeAdmission: (() => void) | undefined
+    let disposeSetup: () => void = () => undefined
+    try {
     if (composition !== undefined) {
       const relaxableDeny = savedComposition?.relaxableDeny ?? []
       let accepted = composition.toolFilter
@@ -691,12 +695,15 @@ export function installMemberSelectionRuntime(
         if (known !== undefined) accepted = { ...composition.toolFilter,
           deny: composition.toolFilter.deny.filter(name => known.has(name) || !relaxableDeny.includes(name)) }
       }
-      childCtx.tools.restrict(accepted)
-      childCtx.systemPrompt.section({
-        name: 'deployment:persona-prefix',
-        order: childCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
-        text: composition.persona,
-      })
+      const stopFilter = childCtx.tools.restrict(accepted)
+      try {
+        const stopPersona = childCtx.systemPrompt.section({
+          name: 'deployment:persona-prefix',
+          order: childCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
+          text: composition.persona,
+        })
+        compositionDisposers.push(() => { stopPersona(); stopFilter() })
+      } catch (error) { stopFilter(); throw error }
       if (freshComposition !== undefined) {
         const append = writeComposition ?? (dshSession as typeof dshSession & {
           appendPluginRecord?: (session: Session, type: string, data: unknown) => unknown
@@ -710,7 +717,7 @@ export function installMemberSelectionRuntime(
     }
     // Internal settlement wakeups bypass the public delivery guard. Recheck
     // exact durable membership on every proposed step, including cold resume.
-    const disposeAdmission = childCtx.on('agent/pre-step', async (payload, next) => {
+    disposeAdmission = childCtx.on('agent/pre-step', async (payload, next) => {
       if (payload.agent.id !== child.id) return next()
       const admitted = await withTeamLock(`team:${stateRoot}:${teamId}`, async () => {
         const team = await readTeam(stateRoot, teamId)
@@ -728,27 +735,26 @@ export function installMemberSelectionRuntime(
     const savedMember = savedTeam?.captainSessionId === parentSessionId
       ? savedTeam.members.find(member => member.id === child.id && member.name === memberName)
       : undefined
+    // A validated child-owned composition has already installed the policy above.
+    // Managed activations omit host descriptor toolFilter by design; do not
+    // reject a cold resume merely because the redundant team setup is absent.
     const setup = pendingSetup.get(key) ?? savedMember?.runtimeSetup
     if (usesManagedActivations(ctx.subagents) && savedMember !== undefined
-      && setup === undefined && descriptor.toolFilter === undefined) {
-      disposeAdmission()
+      && setup === undefined && descriptor.toolFilter === undefined && composition === undefined) {
       throw new Error('agent-teams: saved member runtime setup is missing; refusing an unrestricted resume')
     }
-    let disposeSetup = (): void => undefined
-    if (usesManagedActivations(ctx.subagents) && setup !== undefined) {
+    if (usesManagedActivations(ctx.subagents) && setup !== undefined && composition === undefined) {
+      const stopFilter = childCtx.tools.restrict(setup.toolFilter)
       try {
-        const stopFilter = childCtx.tools.restrict(setup.toolFilter)
-        try {
-          const stopPersona = childCtx.systemPrompt.section({
-            name: 'deployment:persona-prefix',
-            order: childCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
-            text: setup.persona,
-          })
-          disposeSetup = () => { stopPersona(); stopFilter() }
-        } catch (error) { stopFilter(); throw error }
-      } catch (error) { disposeAdmission(); throw error }
+        const stopPersona = childCtx.systemPrompt.section({
+          name: 'deployment:persona-prefix',
+          order: childCtx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
+          text: setup.persona,
+        })
+        disposeSetup = () => { stopPersona(); stopFilter() }
+      } catch (error) { stopFilter(); throw error }
     }
-    const cleanupAdmission = (): void => { disposeSetup(); disposeAdmission() }
+    const cleanupAdmission = (): void => { disposeSetup(); for (const dispose of compositionDisposers) dispose(); disposeAdmission?.() }
     let selection = pending.get(key)
     if (selection === undefined) {
       const team = readTeamSync(stateRoot, teamId)
@@ -835,6 +841,12 @@ export function installMemberSelectionRuntime(
       disposeSelection()
       disposeFailure()
       cleanupAdmission()
+    }
+    } catch (error) {
+      disposeSetup()
+      for (const dispose of compositionDisposers) dispose()
+      disposeAdmission?.()
+      throw error
     }
   })
 

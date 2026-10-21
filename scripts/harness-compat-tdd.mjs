@@ -246,6 +246,34 @@ await test('a child inheriting another member descriptor does not acquire member
   ctx.dispose()
 })
 
+await test('managed activation cold-resumes a scoped member from its validated session composition', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-managed-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  const filter = { deny: ['agent_teams_create'] }
+  await createTeamDir(join(workspace, '.agent-teams'), {
+    id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 0, tasks: [],
+    members: [{ id: 'member-id', name: 'worker', status: 'idle', joinedAt: 1, provider: 'primary', model: 'model' }],
+  })
+  const ctx = scope({ subagents: { ...modernRuntime(), startActivation() {} } })
+  t.after(() => ctx.dispose())
+  installMemberSelectionRuntime(ctx, '.agent-teams')
+  const agent = child({ workspace })
+  agent.session.ownEvents = () => [
+    { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', agentProvider: 'primary', agentModel: 'model' } },
+    { type: 'plugin:agent-teams/member-composition', ignorable: true, data: {
+      teamId: 'team', memberName: 'worker', parentSessionId: 'captain', persona: 'Trusted worker', toolFilter: filter,
+    } },
+  ]
+  const applied = [], sections = []
+  agent.ctx.tools = { restrict: value => { applied.push(value); return () => {} } }
+  agent.ctx.systemPrompt = { section: value => { sections.push(value); return () => {} }, getSectionOrder: () => 0 }
+  ctx.emit('agent/session-start', { agent, source: 'resume' })
+  assert.deepEqual(applied, [filter])
+  assert.equal(sections.length, 1)
+  assert.equal(sections[0].text, 'Trusted worker')
+  assert.deepEqual(await selection(agent), { provider: 'primary', model: 'model' })
+})
+
 await test('alpha.4 cold resume rebuilds persona and tool policy from the durable member', async t => {
   const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-compat-'))
   t.after(() => rm(workspace, { recursive: true, force: true }))
@@ -626,8 +654,14 @@ await test('managed activations restore scoped persona and tools before fresh an
   await createTeamDir(join(workspace, '.agent-teams'), team)
   for (const cold of [false, true]) {
     const ctx = scope({ subagents: { ...modernRuntime(), startActivation() {} } })
-    const bridge = installMemberSelectionRuntime(ctx, '.agent-teams')
+    const bridge = installMemberSelectionRuntime(ctx, '.agent-teams', undefined, () => undefined)
     const agent = child({ workspace })
+    agent.session.ownEvents = () => [
+      { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', agentProvider: 'primary', agentModel: 'model' } },
+      { type: 'plugin:agent-teams/member-composition', ignorable: true, data: {
+        teamId: 'team', memberName: 'worker', parentSessionId: 'captain', persona: setup.persona, toolFilter: setup.toolFilter,
+      } },
+    ]
     const installed = new Map()
     agent.ctx.tools = { restrict(filter) { installed.set('filter', filter); return () => installed.delete('filter') } }
     agent.ctx.systemPrompt = { getSectionOrder: () => 1, section(section) {
@@ -676,8 +710,8 @@ await test('managed cold resume rejects missing setup and fresh failed persona r
   const ctx = scope({ subagents: { ...modernRuntime(), startActivation() {} } })
   const bridge = installMemberSelectionRuntime(ctx, '.agent-teams')
   const cold = child({ workspace })
-  assert.throws(() => ctx.emit('agent/created', { agent: cold, source: 'resume' }), /runtime setup is missing/)
-  assert.equal(cold.ctx.listeners.get('agent/pre-step').size, 0)
+  assert.throws(() => ctx.emit('agent/created', { agent: cold, source: 'resume' }), /saved member composition is unavailable/)
+  assert.equal(cold.ctx.listeners.get('agent/pre-step')?.size ?? 0, 0)
   const fresh = child({ workspace })
   let restricted = false
   fresh.ctx.tools = { restrict() { restricted = true; return () => { restricted = false } } }
@@ -686,8 +720,50 @@ await test('managed cold resume rejects missing setup and fresh failed persona r
     ctx.emit('agent/created', { agent: fresh, source: 'create' })
   }, { persona: 'role', toolFilter: { deny: [] } }), /persona refused/)
   assert.equal(restricted, false)
-  assert.equal(fresh.ctx.listeners.get('agent/pre-step').size, 0)
+  assert.equal(fresh.ctx.listeners.get('agent/pre-step')?.size ?? 0, 0)
   assert.equal(bridge.isPendingMember(fresh), false)
+  ctx.dispose()
+})
+
+await test('managed scoped setup rolls back filter and persona when composition persistence fails', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-managed-failure-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  const ctx = scope({ subagents: { ...modernRuntime(), startActivation() {} } })
+  const bridge = installMemberSelectionRuntime(ctx, '.agent-teams', undefined, () => { throw Error('persist refused') })
+  const agent = child({ workspace })
+  let filters = 0, personas = 0
+  agent.ctx.tools = { restrict() { filters++; return () => { filters-- } } }
+  agent.ctx.systemPrompt = { getSectionOrder: () => 1, section() { personas++; return () => { personas-- } } }
+  await assert.rejects(bridge.withPending('captain', 'agent-teams:team:worker', { provider: 'primary', model: 'model' }, async () => {
+    ctx.emit('agent/created', { agent, source: 'create' })
+  }, { persona: 'Trusted', toolFilter: { deny: ['agent_teams_create'] } }), /persist refused/)
+  assert.deepEqual([filters, personas], [0, 0])
+  assert.equal(agent.ctx.listeners.get('agent/pre-step')?.size ?? 0, 0)
+  ctx.dispose()
+})
+
+await test('managed cold resume rolls back scoped setup on descriptor route mismatch', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'agent-teams-managed-mismatch-'))
+  t.after(() => rm(workspace, { recursive: true, force: true }))
+  await createTeamDir(join(workspace, '.agent-teams'), {
+    id: 'team', name: 'Team', captainSessionId: 'captain', createdAt: 1, taskSeq: 0, tasks: [],
+    members: [{ id: 'member-id', name: 'worker', status: 'idle', joinedAt: 1, provider: 'different', model: 'model' }],
+  })
+  const ctx = scope({ subagents: { ...modernRuntime(), startActivation() {} } })
+  installMemberSelectionRuntime(ctx, '.agent-teams')
+  const agent = child({ workspace })
+  agent.session.ownEvents = () => [
+    { type: 'subagent/descriptor', data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'agent-teams:team:worker', agentProvider: 'primary', agentModel: 'model' } },
+    { type: 'plugin:agent-teams/member-composition', ignorable: true, data: {
+      teamId: 'team', memberName: 'worker', parentSessionId: 'captain', persona: 'Trusted', toolFilter: { deny: ['agent_teams_create'] },
+    } },
+  ]
+  let filters = 0, personas = 0
+  agent.ctx.tools = { restrict() { filters++; return () => { filters-- } } }
+  agent.ctx.systemPrompt = { getSectionOrder: () => 1, section() { personas++; return () => { personas-- } } }
+  assert.throws(() => ctx.emit('agent/created', { agent, source: 'resume' }), /saved model route.*does not match/)
+  assert.deepEqual([filters, personas], [0, 0])
+  assert.equal(agent.ctx.listeners.get('agent/pre-step')?.size ?? 0, 0)
   ctx.dispose()
 })
 
